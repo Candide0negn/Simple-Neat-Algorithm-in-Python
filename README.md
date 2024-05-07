@@ -1,1 +1,1 @@
-# Simple-Neat-Alg-in-C-
+# Simple Neat Algorithm in C++

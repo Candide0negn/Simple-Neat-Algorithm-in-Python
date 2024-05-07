@@ -124,6 +124,4 @@ void mutate_add_neuron(Genome &genome){
     ); 
 }
 
-void mutate_remove_neuron(Genome &genome) {
-    if (genome.)
-}
+
