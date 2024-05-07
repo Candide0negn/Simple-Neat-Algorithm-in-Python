@@ -124,4 +124,107 @@ void mutate_add_neuron(Genome &genome){
     ); 
 }
 
+void mutate_remove_neuron(Genome &genome) {
+    if (genome.num_hidden() == 0){
+        return;
+    }
 
+    const auto &neurons = genome.neurons();
+    auto neuron_it = choose_random_hidden(neurons);
+
+    //Delete the associated links
+    auto &links = genome.links();
+    link.erase(
+        std::remove_if(links.begin(), links.end(),
+                        [neuron_it](const LinkGene &link) {
+                            return link.has_neuron(*neuron_it);
+                        }),
+        links.end());
+
+    //Delete the neuron
+    genome.neurons().erase(neuron_it);
+}
+
+struct DoubleConfig {
+    double init_mean = 0.0;
+    double init_stdev = 1.0;
+    double min = -20.0;
+    double max = 20.0;
+    double mutation_rate = 0.2;
+    double mutate_power = 1.2;
+    double replace_rate = 0.05;
+};
+
+double new_value(){
+    return clamp(rng.next_gaussian(
+        config.init_mean, config.init_stdev));
+}
+
+double mutate_delta(double value){
+    double delta = clamp(
+        rng.next_gaussian(0.0, config.mutate_power));
+}
+
+double clamp(double x) const{
+    return std::min(config.max, std::max(config.min, x));
+}
+
+int main(int argc, char** argv){
+    //Define configurations
+    Population population{neat_config, rng};
+    ComputeFitnessFn compute_fitness{rng};
+    auto winner = population.run(compute_fitness, num_generations);
+    save(winner.genome, winner_filename);
+    return 0;
+}
+
+class Population {
+public:
+    Population(NeatConfig config, rng &rng) : config{config}, rng{rng} {
+        for (int i = 0; i < config.population_size; i++) {
+            individuals.push_back({new_genome(), kFitnessNotComputed});
+        }
+    }
+private:
+    Genome new_genome(){
+        Genome genome{next_genome_id(), num_inputs, num_outputs};
+        for(int neuron_id = 0, neuron_id < num_outputs; neuron_id++){
+            genome.add_neuron(new_neuron(neuron_id));
+        }
+
+        //fully connected feed-forward
+        for(int i = 0; i < num_inputs; i++){
+            int input_id = -i - 1;
+            for(int output_id = 0; output_id < num_outputs; output_id++){
+                genome.add_link(new_link(input_id, output_id));
+            }
+        }
+        return genome;
+    }
+};
+
+template<typename FitnessFn>
+Individual run(FitnessFn compute_fitness, int num_generations){
+    for( int i = 0; i < num_generations; i++){
+        compute_fitness(individuals.begin(), individuals.end());
+        update_best();
+        individuals = reproduce();
+    }
+}
+
+std::vector<Individual> reproduce(){
+    auto old_members = sort_individuals_by_fitness(individuals);
+    int reproduction_cutoff = std::ceil(
+        config.survival_threshold * old_members.size());
+
+    std::vector<Individual> new_generation;
+    int spawn_size = population_size;
+    while (spawn_size-- > = 0){
+        const auto& p1 = *rng.choose_random(old_members, reproduction_cutoff);
+        const auto& p2 = *rng.choose_random(old_members, reproduction_cutoff);
+        Genome offsping = crossover(*p1. *p2);
+        mutate(offsping);
+        new_generation.push_back(std::move(offsping));
+    }
+    return new_generation;
+}
