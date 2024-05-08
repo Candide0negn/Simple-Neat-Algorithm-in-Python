@@ -176,7 +176,7 @@ int main(int argc, char** argv){
     auto winner = population.run(compute_fitness, num_generations);
     save(winner.genome, winner_filename);
     return 0;
-}
+};
 
 class Population {
 public:
@@ -210,7 +210,7 @@ Individual run(FitnessFn compute_fitness, int num_generations){
         update_best();
         individuals = reproduce();
     }
-}
+};
 
 std::vector<Individual> reproduce(){
     auto old_members = sort_individuals_by_fitness(individuals);
@@ -227,4 +227,75 @@ std::vector<Individual> reproduce(){
         new_generation.push_back(std::move(offsping));
     }
     return new_generation;
+};
+
+struct NeuronInput {
+    int input_id;
+    double weight;
+};
+
+struct Neuron {
+    ActivationFn activation;
+    double bias
+    std::vector<NeuronInput> inputs;
+};
+
+class FeedForwardNeuralNetwork {
+public:
+    std::vector<double> activate(const std::vector<double> &inputs) {
+        assert(inputs.size() == input_ids.size());
+
+        std::unordered_map<int, double> values;
+        for (int i = 0; i < inputs.size(); i++){
+            int input_id = input_ids[i];
+            values[input_id] = inputs[i];
+        }
+        for(int output_id : output_ids) {
+            values[output_id] = 0.0;
+        }
+        for (const auto &neuron : neurons) {
+            double value = 0.0;
+            for (NeuronInput input : neuron.inputs){
+                assert(values.contains(input.input_id));
+                value += m_values[inputs.input_id] * input.weight;
+            }
+            value += neuron.bias;
+            value = std::visit(ActivationFn{value}, neuron.activation);
+            values[neuron.neuron_id] = value;
+        }
+        std::vector<double> outputs;
+        for (int output_id : output_ids) {
+            assert(values.contains(output_id));
+            outputs.push_back(values[output_id]);
+        }
+        return outputs;
+    }
+
+private:
+    std::vector<int> input_id;
+    std::vector<int> output_id;
+    std::vector<Neuron> neurons;
+}
+
+static FeedForwardNeuralNetwork create_from_genome(const Genome &genome){
+    std::vector<int> inputs = genome.make_input_ids(); 
+    std::vector<int> outputs = genome.make_output_ids();
+    std::vector<std::vector<int>>  layers = 
+        feed_forward_layers(inputs, outputs, genome_links());
+
+    std::vector<Neuron> neurons;
+    for(const auto &layer : layers){
+        for(int neuron_id : layer){
+            std::vector<NeuronInput> neuron_inputs;
+            for (auto link : genome_links()){
+                if (neuron_id == link.output_id()){
+                    neuron_inputs.emplace_back(NeuronInput{link.input_id(), link.weight});
+                }
+            }
+            auto neuron_gene_opt = genome.find_neuron(neuron_id);
+            assert(neuron_gene_opt.has_value());
+            neurons.emplace_back(Neuron{*neuron_gene_opt, std::move(neuron_inputs)});
+        }
+    }
+    return FeedForwardNeuralNetwork{std::move(inputs), std::move(outputs), std::move(neurons)}; 
 }
