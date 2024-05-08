@@ -273,4 +273,310 @@ void mutate_remove_neuron(Genome& genome) {
     if (neuron_it != genome.neurons.end()) {
         auto& links = genome.links;
         links.erase(std::remove_if(links.begin(), links.end(), [neuron_it](const LinkGene& link) {
-            
+            return link.link_id.input_id == neuron_it->neuron_id || link.link_id.output_id == neuron_it->neuron_id;
+        }), links.end());
+
+        genome.neurons.erase(neuron_it);
+    }
+}
+
+// Configuration structure for double values
+struct DoubleConfig {
+    double init_mean = 0.0;
+    double init_stdev = 1.0;
+    double min = -20.0;
+    double max = 20.0;
+    double mutation_rate = 0.2;
+    double mutate_power = 1.2;
+    double replace_rate = 0.05;
+};
+
+DoubleConfig config;
+
+double clamp(double x, double min, double max) {
+    return std::min(max, std::max(min, x));
+}
+
+double clamp(double x) {
+    return clamp(x, config.min, config.max);
+}
+
+double new_value() {
+    return clamp(rng.next_gaussian(config.init_mean, config.init_stdev));
+}
+
+double mutate_delta(double value) {
+    double delta = rng.next_gaussian(0.0, config.mutate_power);
+    return clamp(value + delta);
+}
+
+// Population class to manage a population of individuals
+class Population {
+public:
+    Population(const DoubleConfig& neat_config, RNG& rng)
+        : config(neat_config), rng(rng), next_genome_id(0), next_individual_id(0) {
+        for (int i = 0; i < neat_config.population_size; ++i) {
+            individuals.push_back({new_genome(), kFitnessNotComputed});
+        }
+    }
+
+    template<typename FitnessFn>
+    Individual run(FitnessFn compute_fitness, int num_generations) {
+        for (int i = 0; i < num_generations; ++i) {
+            compute_fitness(individuals.begin(), individuals.end());
+            update_best();
+            individuals = reproduce();
+        }
+        return best;
+    }
+
+private:
+    const double kFitnessNotComputed = -1.0;
+
+    Genome new_genome() {
+        Genome genome{next_genome_id++, config.num_inputs, config.num_outputs};
+
+        for (int neuron_id = 0; neuron_id < config.num_outputs; ++neuron_id) {
+            genome.add_neuron(new_neuron(neuron_id));
+        }
+
+        // Fully connected feed-forward
+        for (int i = 0; i < config.num_inputs; ++i) {
+            int input_id = -i - 1;
+            for (int output_id = 0; output_id < config.num_outputs; ++output_id) {
+                genome.add_link(new_link(input_id, output_id));
+            }
+        }
+        return genome;
+    }
+
+    NeuronGene new_neuron(int neuron_id) {
+        return {neuron_id, new_value(), Activation{}};
+    }
+
+    LinkGene new_link(int input_id, int output_id) {
+        LinkId link_id{input_id, output_id};
+        return {link_id, new_value(), true};
+    }
+
+    void update_best() {
+        best = *std::max_element(individuals.begin(), individuals.end(), [](const Individual& a, const Individual& b) {
+            return a.fitness < b.fitness;
+        });
+    }
+
+    std::vector<Individual> reproduce() {
+        auto old_members = sort_individuals_by_fitness(individuals);
+        int reproduction_cutoff = static_cast<int>(std::ceil(config.survival_threshold * old_members.size()));
+
+        std::vector<Individual> new_generation;
+        int spawn_size = config.population_size;
+        while (spawn_size-- > 0) {
+            const auto& p1 = *rng.choose_random(old_members, reproduction_cutoff);
+            const auto& p2 = *rng.choose_random(old_members, reproduction_cutoff);
+            Genome offspring_genome = crossover(p1, p2);
+            mutate(offspring_genome);
+            new_generation.push_back({offspring_genome, kFitnessNotComputed});
+        }
+        return new_generation;
+    }
+
+    std::vector<Individual> sort_individuals_by_fitness(std::vector<Individual>& individuals) {
+        std::sort(individuals.begin(), individuals.end(), [](const Individual& a, const Individual& b) {
+            return a.fitness > b.fitness;
+        });
+        return individuals;
+    }
+
+    void mutate(Genome& genome) {
+        if (rng.dist_01(rng.rng) < config.mutation_rate) {
+            mutate_add_link(genome);
+        }
+        if (rng.dist_01(rng.rng) < config.mutation_rate) {
+            mutate_remove_link(genome);
+        }
+        if (rng.dist_01(rng.rng) < config.mutation_rate) {
+            mutate_add_neuron(genome);
+        }
+        if (rng.dist_01(rng.rng) < config.mutation_rate) {
+            mutate_remove_neuron(genome);
+        }
+    }
+
+    const DoubleConfig& config;
+    RNG& rng;
+    int next_genome_id;
+    int next_individual_id;
+    Individual best;
+    std::vector<Individual> individuals;
+};
+
+// Struct representing a neuron's input connection
+struct NeuronInput {
+    int input_id;
+    double weight;
+};
+
+// Struct representing a neuron in a neural network
+struct Neuron {
+    ActivationFn activation;
+    double bias;
+    std::vector<NeuronInput> inputs;
+};
+
+// Class representing a feed-forward neural network
+class FeedForwardNeuralNetwork {
+public:
+    FeedForwardNeuralNetwork(std::vector<int> input_ids, std::vector<int> output_ids, std::vector<Neuron> neurons)
+        : input_ids(std::move(input_ids)), output_ids(std::move(output_ids)), neurons(std::move(neurons)) {}
+
+    std::vector<double> activate(const std::vector<double>& inputs) const {
+        assert(inputs.size() == input_ids.size());
+
+        std::unordered_map<int, double> values;
+        for (size_t i = 0; i < inputs.size(); ++i) {
+            int input_id = input_ids[i];
+            values[input_id] = inputs[i];
+        }
+
+        for (int output_id : output_ids) {
+            values[output_id] = 0.0;
+        }
+
+        for (const auto& neuron : neurons) {
+            double value = 0.0;
+            for (const NeuronInput& input : neuron.inputs) {
+                assert(values.find(input.input_id) != values.end());
+                value += values[input.input_id] * input.weight;
+            }
+            value += neuron.bias;
+            value = neuron.activation(value);
+            values[neuron.neuron_id] = value;
+        }
+
+        std::vector<double> outputs;
+        for (int output_id : output_ids) {
+            assert(values.find(output_id) != values.end());
+            outputs.push_back(values[output_id]);
+        }
+        return outputs;
+    }
+
+private:
+    std::vector<int> input_ids;
+    std::vector<int> output_ids;
+    std::vector<Neuron> neurons;
+};
+
+// Function to create a feed-forward neural network from a genome
+FeedForwardNeuralNetwork create_from_genome(const Genome& genome) {
+    std::vector<int> inputs = genome.make_input_ids();
+    std::vector<int> outputs = genome.make_output_ids();
+
+    auto feed_forward_layers = [&](const std::vector<int>& input_ids, const std::vector<int>& output_ids, const std::vector<LinkGene>& links) {
+        std::vector<std::vector<int>> layers;
+        std::unordered_map<int, int> layer_map;
+
+        for (int input_id : input_ids) {
+            layer_map[input_id] = 0;
+        }
+
+        int layer_idx = 1;
+        std::vector<int> current_layer = output_ids;
+        while (!current_layer.empty()) {
+            layers.push_back(current_layer);
+            std::vector<int> next_layer;
+
+            for (int neuron_id : current_layer) {
+                for (const auto& link : links) {
+                    if (link.link_id.output_id == neuron_id && layer_map.find(link.link_id.input_id) == layer_map.end()) {
+                        layer_map[link.link_id.input_id] = layer_idx;
+                        next_layer.push_back(link.link_id.input_id);
+                    }
+                }
+            }
+
+            current_layer = next_layer;
+            ++layer_idx;
+        }
+
+        std::reverse(layers.begin(), layers.end());
+        return layers;
+    };
+
+    std::vector<std::vector<int>> layers = feed_forward_layers(inputs, outputs, genome.links);
+
+    std::vector<Neuron> neurons;
+    for (const auto& layer : layers) {
+        for (int neuron_id : layer) {
+            std::vector<NeuronInput> neuron_inputs;
+            for (const auto& link : genome.links) {
+                if (neuron_id == link.link_id.output_id) {
+                    neuron_inputs.emplace_back(NeuronInput{link.link_id.input_id, link.weight});
+                }
+            }
+
+            std::optional<NeuronGene> neuron_gene_opt = genome.find_neuron(neuron_id);
+            assert(neuron_gene_opt.has_value());
+
+            neurons.emplace_back(Neuron{std::get<ActivationFn>(neuron_gene_opt->activation.fn), neuron_gene_opt->bias, std::move(neuron_inputs)});
+        }
+    }
+
+    return FeedForwardNeuralNetwork{std::move(inputs), std::move(outputs), std::move(neurons)};
+}
+
+// Main function
+int main(int argc, char** argv) {
+    DoubleConfig neat_config;
+    neat_config.population_size = 150;
+    neat_config.num_inputs = 24;
+    neat_config.num_outputs = 4;
+    neat_config.survival_threshold = 0.2;
+    neat_config.mutation_rate = 0.2;
+
+    RNG rng;
+    Population population{neat_config, rng};
+
+    auto compute_fitness = [](auto begin, auto end) {
+    for (auto it = begin; it != end; ++it) {
+        // Placeholder for fitness computation logic
+        it->fitness = rng.next_gaussian(0.0, 1.0);
+    }
+};
+
+int num_generations = 100;
+std::string winner_filename = "winner_genome.txt";
+
+auto winner = population.run(compute_fitness, num_generations);
+
+// Function to save the winner genome to a file (as an example)
+void save(const Genome& genome, const std::string& filename) {
+    std::ofstream file(filename);
+    if (!file) {
+        std::cerr << "Error: Unable to open file for saving." << std::endl;
+        return;
+    }
+
+    file << "Genome ID: " << genome.genome_id << '\n';
+    file << "Num Inputs: " << genome.num_inputs << '\n';
+    file << "Num Outputs: " << genome.num_outputs << '\n';
+
+    file << "Neurons:\n";
+    for (const auto& neuron : genome.neurons) {
+        file << "  Neuron ID: " << neuron.neuron_id << ", Bias: " << neuron.bias << '\n';
+    }
+
+    file << "Links:\n";
+    for (const auto& link : genome.links) {
+        file << "  Link: " << link.link_id.input_id << " -> " << link.link_id.output_id
+             << ", Weight: " << link.weight << ", Enabled: " << link.is_enabled << '\n';
+    }
+
+    file.close();
+}
+
+save(winner.genome, winner_filename);
+
+return 0;
+}
