@@ -43,7 +43,8 @@ public:
             }
 
             generate_food();
-            //Keep tail
+            //Keep tail as snake grows longer
+            snake.body.push_back(tail);
         }
 
         snake.body.push_front(new_head);
@@ -59,4 +60,14 @@ private:
     int score;
     Direction current_direction;
 
-}
+    void generate_food(){
+        do {
+            food.row = rng.next_int(height - 1);
+            food.column = rng.next_int(width - 1);
+        } while (hits_snake_body(food));
+    }
+
+    bool hits_wall(const Coordinates &c) const { ... }
+    bool hits_snake_body(const Coordinates &c) { ... }
+
+};
