@@ -13,6 +13,7 @@
 #include <fstream>
 
 // Neuroevolution Code
+
 struct RNG {
     std::mt19937 rng{std::random_device{}()};
     std::uniform_real_distribution<double> dist_01{0.0, 1.0};
@@ -31,7 +32,14 @@ struct RNG {
         std::uniform_int_distribution<size_t> dist(0, vec.size() - 1);
         return vec[dist(rng)];
     }
-    
+
+    template<typename Iter>
+    Iter choose_random(Iter start, Iter end) {
+        std::uniform_int_distribution<size_t> dist(0, std::distance(start, end) - 1);
+        std::advance(start, dist(rng));
+        return start;
+    }
+
     double next_gaussian(double mean, double stdev) {
         std::normal_distribution<double> dist(mean, stdev);
         return dist(rng);
@@ -40,6 +48,18 @@ struct RNG {
     int next_int(int max) {
         std::uniform_int_distribution<int> dist(0, max);
         return dist(rng);
+    }
+
+    std::function<double(double)> choose(double probability, const std::function<double(double)>& a, const std::function<double(double)>& b) {
+        return dist_01(rng) < probability ? a : b;
+    }
+
+    Activation choose(double probability, const Activation& a, const Activation& b) {
+        if (dist_01(rng) < probability) {
+            return a;
+        } else {
+            return b;
+        }
     }
 };
 
@@ -138,7 +158,8 @@ NeuronGene crossover_neuron(const NeuronGene& a, const NeuronGene& b) {
     double bias = rng.choose(0.5, a.bias, b.bias);
     Activation activation;
     if (std::holds_alternative<ActivationFn>(a.activation.fn) && std::holds_alternative<ActivationFn>(b.activation.fn)) {
-        activation.fn = rng.choose(0.5, std::get<ActivationFn>(a.activation.fn), std::get<ActivationFn>(b.activation.fn));
+        ActivationFn fn = rng.choose(0.5, std::get<ActivationFn>(a.activation.fn), std::get<ActivationFn>(b.activation.fn));
+        activation.fn = fn;
     } else {
         activation = rng.choose(0.5, a.activation, b.activation);
     }
@@ -369,20 +390,20 @@ private:
     }
 
     std::vector<Individual> reproduce() {
-        auto old_members = sort_individuals_by_fitness(individuals);
-        int reproduction_cutoff = static_cast<int>(std::ceil(config.survival_threshold * old_members.size()));
-
-        std::vector<Individual> new_generation;
-        int spawn_size = config.population_size;
-        while (spawn_size-- > 0) {
-            const auto& p1 = *rng.choose_random(old_members.begin(), old_members.begin() + reproduction_cutoff);
-            const auto& p2 = *rng.choose_random(old_members.begin(), old_members.begin() + reproduction_cutoff);
-            Genome offspring_genome = crossover(p1, p2);
-            mutate(offspring_genome);
-            new_generation.push_back({offspring_genome, kFitnessNotComputed});
-        }
-        return new_generation;
+    auto old_members = sort_individuals_by_fitness(individuals);
+    int reproduction_cutoff = static_cast<int>(std::ceil(config.survival_threshold * old_members.size()));
+    std::vector<Individual> new_generation;
+    int spawn_size = config.population_size;
+    while (spawn_size-- > 0) {
+        const auto& p1 = *rng.choose_random(old_members.begin(), old_members.begin() + reproduction_cutoff);
+        const auto& p2 = *rng.choose_random(old_members.begin(), old_members.begin() + reproduction_cutoff);
+        Genome offspring_genome = crossover(p1, p2);
+        mutate(offspring_genome);
+        new_generation.push_back({offspring_genome, kFitnessNotComputed});
     }
+    return new_generation;
+    }
+
 
     std::vector<Individual> sort_individuals_by_fitness(std::vector<Individual>& individuals) {
         std::sort(individuals.begin(), individuals.end(), [](const Individual& a, const Individual& b) {
@@ -653,6 +674,8 @@ Action map_nn_output_to_action(const std::vector<double>& nn_output) {
         default: return Action::DoNothing;
     }
 }
+
+
 
 double evaluate_fitness(const FeedForwardNeuralNetwork& nn, SnakeEngine& snake_engine) {
     snake_engine.reset();
