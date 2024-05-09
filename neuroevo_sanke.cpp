@@ -263,7 +263,19 @@ void mutate_remove_neuron(Genome& genome) {
         return neuron.neuron_id == choose_random_hidden(genome.neurons);
     });
 
-    if (neuron_it
+    if (neuron_it != genome.neurons.end()) {
+  int neuron_id = neuron_it->neuron_id;
+  genome.neurons.erase(neuron_it);
+
+  auto link_it = genome.links.begin();
+  while (link_it != genome.links.end()) {
+    if (link_it->link_id.input_id == neuron_id || link_it->link_id.output_id == neuron_id) {
+      link_it = genome.links.erase(link_it);
+    } else {
+      ++link_it;
+    }
+  }
+}
 
     // Population Configuration
 struct DoubleConfig {
