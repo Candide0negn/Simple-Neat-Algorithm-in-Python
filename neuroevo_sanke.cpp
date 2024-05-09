@@ -265,4 +265,653 @@ void mutate_remove_neuron(Genome& genome) {
 
     if (neuron_it
 
-    
+    // Population Configuration
+struct DoubleConfig {
+    double init_mean = 0.0;
+    double init_stdev = 1.0;
+    double min = -20.0;
+    double max = 20.0;
+    double mutation_rate = 0.2;
+    double mutate_power = 1.2;
+    double replace_rate = 0.05;
+    int population_size = 150;
+    int num_inputs = 24;
+    int num_outputs = 4;
+    double survival_threshold = 0.2;
+};
+
+DoubleConfig config;
+
+double clamp(double x, double min, double max) {
+    return std::min(max, std::max(min, x));
+}
+
+double clamp(double x) {
+    return clamp(x, config.min, config.max);
+}
+
+double new_value() {
+    return clamp(rng.next_gaussian(config.init_mean, config.init_stdev));
+}
+
+double mutate_delta(double value) {
+    double delta = rng.next_gaussian(0.0, config.mutate_power);
+    return clamp(value + delta);
+}
+
+class Population {
+public:
+    Population(const DoubleConfig& neat_config, RNG& rng)
+        : config(neat_config), rng(rng), next_genome_id(0), next_individual_id(0) {
+        for (int i = 0; i < neat_config.population_size; ++i) {
+            individuals.push_back({new_genome(), kFitnessNotComputed});
+        }
+    }
+
+    template<typename FitnessFn>
+    Individual run(FitnessFn compute_fitness, int num_generations) {
+        for (int i = 0; i < num_generations; ++i) {
+            compute_fitness(individuals.begin(), individuals.end());
+            update_best();
+            individuals = reproduce();
+        }
+        return best;
+    }
+
+private:
+    const double kFitnessNotComputed = -1.0;
+
+    Genome new_genome() {
+        Genome genome{next_genome_id++, config.num_inputs, config.num_outputs};
+
+        for (int neuron_id = 0; neuron_id < config.num_outputs; ++neuron_id) {
+            genome.add_neuron(new_neuron(neuron_id));
+        }
+
+        for (int i = 0; i < config.num_inputs; ++i) {
+            int input_id = -i - 1;
+            for (int output_id = 0; output_id < config.num_outputs; ++output_id) {
+                genome.add_link(new_link(input_id, output_id));
+            }
+        }
+        return genome;
+    }
+
+    NeuronGene new_neuron(int neuron_id) {
+        return {neuron_id, new_value(), Activation{}};
+    }
+
+    LinkGene new_link(int input_id, int output_id) {
+        LinkId link_id{input_id, output_id};
+        return {link_id, new_value(), true};
+    }
+
+    void update_best() {
+        best = *std::max_element(individuals.begin(), individuals.end(), [](const Individual& a, const Individual& b) {
+            return a.fitness < b.fitness;
+        });
+    }
+
+    std::vector<Individual> reproduce() {
+        auto old_members = sort_individuals_by_fitness(individuals);
+        int reproduction_cutoff = static_cast<int>(std::ceil(config.survival_threshold * old_members.size()));
+
+        std::vector<Individual> new_generation;
+        int spawn_size = config.population_size;
+        while (spawn_size-- > 0) {
+            const auto& p1 = *rng.choose_random(old_members, reproduction_cutoff);
+            const auto& p2 = *rng.choose_random(old_members, reproduction_cutoff);
+            Genome offspring_genome = crossover(p1, p2);
+            mutate(offspring_genome);
+            new_generation.push_back({offspring_genome, kFitnessNotComputed});
+        }
+        return new_generation;
+    }
+
+    std::vector<Individual> sort_individuals_by_fitness(std::vector<Individual>& individuals) {
+        std::sort(individuals.begin(), individuals.end(), [](const Individual& a, const Individual& b) {
+            return a.fitness > b.fitness;
+        });
+        return individuals;
+    }
+
+    void mutate(Genome& genome) {
+        if (rng.dist_01(rng.rng) < config.mutation_rate) {
+            mutate_add_link(genome);
+        }
+        if (rng.dist_01(rng.rng) < config.mutation_rate) {
+            mutate_remove_link(genome);
+        }
+        if (rng.dist_01(rng.rng) < config.mutation_rate) {
+            mutate_add_neuron(genome);
+        }
+        if (rng.dist_01(rng.rng) < config.mutation_rate) {
+            mutate_remove_neuron(genome);
+        }
+    }
+
+    const DoubleConfig& config;
+    RNG& rng;
+    int next_genome_id;
+    int next_individual_id;
+    Individual best;
+    std::vector<Individual> individuals;
+};
+
+// Neuron and Neural Network Definitions
+struct NeuronInput {
+    int input_id;
+    double weight;
+};
+
+struct Neuron {
+    ActivationFn activation;
+    double bias;
+    std::vector<NeuronInput> inputs;
+};
+
+class FeedForwardNeuralNetwork {
+public:
+    FeedForwardNeuralNetwork(std::vector<int> input_ids, std::vector<int> output_ids, std::vector<Neuron> neurons)
+        : input_ids(std::move(input_ids)), output_ids(std::move(output_ids)), neurons(std::move(neurons)) {}
+
+    std::vector<double> activate(const std::vector<double>& inputs) const {
+        assert(inputs.size() == input_ids.size());
+
+        std::unordered_map<int, double> values;
+        for (size_t i = 0; i < inputs.size(); ++i) {
+            int input_id = input_ids[i];
+            values[input_id] = inputs[i];
+        }
+
+        for (int output_id : output_ids) {
+            values[output_id] = 0.0;
+        }
+
+        for (const auto& neuron : neurons) {
+            double value = 0.0;
+            for (const NeuronInput& input : neuron.inputs) {
+                assert(values.find(input.input_id) != values.end());
+                value += values[input.input_id] * input.weight;
+            }
+            value += neuron.bias;
+            value = neuron.activation(value);
+            values[neuron.neuron_id] = value;
+        }
+
+        std::vector<double> outputs;
+        for (int output_id : output_ids) {
+            assert(values.find(output_id) != values.end());
+            outputs.push_back(values[output_id]);
+        }
+        return outputs;
+    }
+
+private:
+    std::vector<int> input_ids;
+    std::vector<int> output_ids;
+    std::vector<Neuron> neurons;
+};
+
+FeedForwardNeuralNetwork create_from_genome(const Genome& genome) {
+    std::vector<int> inputs = genome.make_input_ids();
+    std::vector<int> outputs = genome.make_output_ids();
+
+    auto feed_forward_layers = [&](const std::vector<int>& input_ids, const std::vector<int>& output_ids, const std::vector<LinkGene>& links) {
+        std::vector<std::vector<int>> layers;
+        std::unordered_map<int, int> layer_map;
+
+        for (int input_id : input_ids) {
+            layer_map[input_id] = 0;
+        }
+
+        int layer_idx = 1;
+        std::vector<int> current_layer = output_ids;
+        while (!current_layer.empty()) {
+            layers.push_back(current_layer);
+            std::vector<int> next_layer;
+
+            for (int neuron_id : current_layer) {
+                for (const auto& link : links) {
+                    if (link.link_id.output_id == neuron_id && layer_map.find(link.link_id.input_id) == layer_map.end()) {
+                        layer_map[link.link_id.input_id] = layer_idx;
+                        next_layer.push_back(link.link_id.input_id);
+                    }
+                }
+            }
+
+            current_layer = next_layer;
+            ++layer_idx;
+        }
+
+        std::reverse(layers.begin(), layers.end());
+        return layers;
+    };
+
+    std::vector<std::vector<int>> layers = feed_forward_layers(inputs, outputs, genome.links);
+
+    std::vector<Neuron> neurons;
+    for (const auto& layer : layers) {
+        for (int neuron_id : layer) {
+            std::vector<NeuronInput> neuron_inputs;
+            for (const auto& link : genome.links) {
+                if (neuron_id == link.link_id.output_id) {
+                    neuron_inputs.emplace_back(NeuronInput{link.link_id.input_id, link.weight});
+                }
+            }
+
+            std::optional<NeuronGene> neuron_gene_opt = genome.find_neuron(neuron_id);
+            assert(neuron_gene_opt.has_value());
+
+            neurons.emplace_back(Neuron{std::get<ActivationFn>(neuron_gene_opt->activation.fn), neuron_gene_opt->bias, std::move(neuron_inputs)});
+        }
+    }
+
+    return FeedForwardNeuralNetwork{std::move(inputs), std::move(outputs), std::move(neurons)};
+}
+
+// Snake Game Definitions
+enum class Action {
+    DoNothing,
+    RotateLeft,
+    RotateRight,
+};
+
+enum class Result {
+    Running,
+    GameOver,
+    Winner,
+};
+
+enum class Direction {
+    Up,
+    Down,
+    Left,
+    Right,
+};
+
+struct Coordinates {
+    int row;
+    int column;
+
+    bool operator==(const Coordinates& other) const {
+        return row == other.row && column == other.column;
+    }
+};
+
+struct CoordinatesHash {
+    std::size_t operator()(const Coordinates& c) const noexcept {
+        return std::hash<int>()(c.row) ^ std::hash<int>()(c.column);
+    }
+};
+
+struct Snake {
+    std::deque<Coordinates> body;
+
+    Coordinates head() const { return body.front(); }
+    Coordinates tail() const { return body.back(); }
+
+    bool contains(const Coordinates& c) const {
+        return std::find(body.begin(), body.end(), c) != body.end();
+    }
+
+    void grow(const Coordinates& new_head) {
+        body.push_front(new_head);
+    }
+
+    void move(const Coordinates& new_head) {
+        body.push_front(new_head);
+        body.pop_back();
+    }
+};
+
+class SnakeEngine {
+public:
+    SnakeEngine(int width, int height, bool allow_through_walls = false)
+        : width(width), height(height), allow_through_walls(allow_through_walls), score(0), current_direction(Direction::Right) {
+        reset();
+    }
+
+    Result process(Action action) {
+        update_direction(action);
+        Coordinates new_head = get_next_head(snake.head(), current_direction);
+
+        if (hits_wall(new_head) || snake.contains(new_head)) {
+            return Result::GameOver;
+        }
+
+        if (new_head == food) {
+            score++;
+            if (snake.body.size() == width * height) {
+                return Result::Winner;
+            }
+            generate_food();
+            snake.grow(new_head);
+        } else {
+            snake.move(new_head);
+        }
+
+        return Result::Running;
+    }
+
+    void reset() {
+        snake = {{Coordinates{height / 2, width / 2}}};
+        score = 0;
+        current_direction = Direction::Right;
+        generate_food();
+    }
+
+    int get_score() const { return score; }
+
+    const Snake& get_snake() const { return snake; }
+    const Coordinates& get_food() const { return food; }
+    Direction get_direction() const { return current_direction; }
+
+private:
+    Snake snake;
+    Coordinates food;
+    bool allow_through_walls;
+    int width;
+    int height;
+    int score;
+    Direction current_direction;
+
+    void generate_food() {
+        do {
+            food.row = rng.next_int(height - 1);
+            food.column = rng.next_int(width - 1);
+        } while (snake.contains(food));
+    }
+
+    Coordinates get_next_head(const Coordinates& head, Direction direction) const {
+        Coordinates new_head = head;
+        switch (direction) {
+            case Direction::Up: new_head.row--; break;
+            case Direction::Down: new_head.row++; break;
+            case Direction::Left: new_head.column--; break;
+            case Direction::Right: new_head.column++; break;
+        }
+
+        if (allow_through_walls) {
+            new_head.row = (new_head.row + height) % height;
+            new_head.column = (new_head.column + width) % width;
+        }
+
+        return new_head;
+    }
+
+    bool hits_wall(const Coordinates& c) const {
+        return !allow_through_walls && (c.row < 0 || c.row >= height || c.column < 0 || c.column >= width);
+    }
+
+    void update_direction(Action action) {
+        switch (action) {
+            case Action::RotateLeft:
+                current_direction = static_cast<Direction>((static_cast<int>(current_direction) + 3) % 4);
+                break;
+            case Action::RotateRight:
+                current_direction = static_cast<Direction>((static_cast<int>(current_direction) + 1) % 4);
+                break;
+            default:
+                break;
+        }
+    }
+};
+
+// Creating the neural network controlled snake agent
+Action map_nn_output_to_action(const std::vector<double>& nn_output) {
+    auto max_it = std::max_element(nn_output.begin(), nn_output.end());
+    int max_idx = std::distance(nn_output.begin(), max_it);
+    switch (max_idx) {
+        case 0: return Action::DoNothing;
+        case 1: return Action::RotateLeft;
+        case 2: return Action::RotateRight;
+        default: return Action::DoNothing;
+    }
+}
+
+double evaluate_fitness(const FeedForwardNeuralNetwork& nn, SnakeEngine& snake_engine) {
+    snake_engine.reset();
+    Result result = Result::Running;
+    int steps_without_food = 0;
+    int max_steps_without_food = 100;
+
+    while (result == Result::Running && steps_without_food < max_steps_without_food) {
+        std::vector<double> inputs;
+        const Snake& snake = snake_engine.get_snake();
+        const Coordinates& head = snake.head();
+        const Coordinates& food = snake_engine.get_food();
+        Direction direction = snake_engine.get_direction();
+
+        // Inputs: normalized distances to walls, food, and snake body
+        auto normalize = [&](int val, int max_val) {
+            return static_cast<double>(val) / static_cast<double>(max_val);
+        };
+
+        // Add distances to walls
+        inputs.push_back(normalize(head.row, snake_engine.get_height()));
+        inputs.push_back(normalize(snake_engine.get_height() - head.row, snake_engine.get_height()));
+        inputs.push_back(normalize(head.column, snake_engine.get_width()));
+        inputs.push_back(normalize(snake_engine.get_width() - head.column, snake_engine.get_width()));
+
+        // Add distances to food
+        inputs.push_back(normalize(food.row - head.row, snake_engine.get_height()));
+        inputs.push_back(normalize(food.column - head.column, snake_engine.get_width()));
+
+        // Add current direction
+        inputs.resize(24
+
+
+
+        // Add current direction to the inputs
+        inputs.push_back(direction == Direction::Up ? 1.0 : 0.0);
+        inputs.push_back(direction == Direction::Right ? 1.0 : 0.0);
+        inputs.push_back(direction == Direction::Down ? 1.0 : 0.0);
+        inputs.push_back(direction == Direction::Left ? 1.0 : 0.0);
+
+        // Add nearby snake body information (normalized distances)
+        std::unordered_map<Coordinates, double, CoordinatesHash> distances;
+        for (const auto& part : snake.body) {
+            int row_diff = part.row - head.row;
+            int col_diff = part.column - head.column;
+
+            if (row_diff == 0 && col_diff == 0) continue; // Skip head itself
+
+            if (row_diff == 0 && col_diff > 0) {
+                distances[Coordinates{0, 1}] = normalize(col_diff, snake_engine.get_width());
+            } else if (row_diff == 0 && col_diff < 0) {
+                distances[Coordinates{0, -1}] = normalize(-col_diff, snake_engine.get_width());
+            } else if (col_diff == 0 && row_diff > 0) {
+                distances[Coordinates{1, 0}] = normalize(row_diff, snake_engine.get_height());
+            } else if (col_diff == 0 && row_diff < 0) {
+                distances[Coordinates{-1, 0}] = normalize(-row_diff, snake_engine.get_height());
+            }
+        }
+
+        // Default values if no body part nearby
+        inputs.push_back(distances[Coordinates{-1, 0}]);
+        inputs.push_back(distances[Coordinates{1, 0}]);
+        inputs.push_back(distances[Coordinates{0, -1}]);
+        inputs.push_back(distances[Coordinates{0, 1}]);
+
+        // Predict the next action using the neural network
+        std::vector<double> nn_output = nn.activate(inputs);
+        Action action = map_nn_output_to_action(nn_output);
+
+        // Execute the action on the snake engine
+        result = snake_engine.process(action);
+
+        // Count steps without food
+        if (result == Result::Running) {
+            steps_without_food++;
+        } else {
+            steps_without_food = 0;
+        }
+    }
+
+    // Fitness is the score plus a small penalty for excess steps without food
+    return static_cast<double>(snake_engine.get_score()) - 0.1 * static_cast<double>(steps_without_food);
+}
+
+// Fitness computation function for the entire population
+void compute_fitness(std::vector<Individual>::iterator begin, std::vector<Individual>::iterator end, SnakeEngine& snake_engine) {
+    for (auto it = begin; it != end; ++it) {
+        FeedForwardNeuralNetwork nn = create_from_genome(it->genome);
+        it->fitness = evaluate_fitness(nn, snake_engine);
+    }
+}
+
+// SFML-based Snake Game UI
+class SnakeUI {
+public:
+    SnakeUI(int width, int height, int cell_size)
+        : width(width), height(height), cell_size(cell_size), window(sf::VideoMode(width * cell_size, height * cell_size), "Neuroevolution Snake") {
+        window.setFramerateLimit(60);
+        snake_shape.setSize(sf::Vector2f(static_cast<float>(cell_size), static_cast<float>(cell_size)));
+        snake_shape.setFillColor(sf::Color::Green);
+        food_shape.setSize(sf::Vector2f(static_cast<float>(cell_size), static_cast<float>(cell_size)));
+        food_shape.setFillColor(sf::Color::Red);
+    }
+
+    void draw(const Snake& snake, const Coordinates& food) {
+        window.clear();
+
+        for (const auto& part : snake.body) {
+            snake_shape.setPosition(static_cast<float>(part.column * cell_size), static_cast<float>(part.row * cell_size));
+            window.draw(snake_shape);
+        }
+
+        food_shape.setPosition(static_cast<float>(food.column * cell_size), static_cast<float>(food.row * cell_size));
+        window.draw(food_shape);
+
+        window.display();
+    }
+
+    bool is_open() const {
+        return window.isOpen();
+    }
+
+    void process_events() {
+        sf::Event event;
+        while (window.pollEvent(event)) {
+            if (event.type == sf::Event::Closed) {
+                window.close();
+            }
+        }
+    }
+
+private:
+    int width;
+    int height;
+    int cell_size;
+    sf::RenderWindow window;
+    sf::RectangleShape snake_shape;
+    sf::RectangleShape food_shape;
+};
+
+// Function to visualize the best individual from the population
+void visualize_best_individual(const Individual& best, SnakeEngine& snake_engine, SnakeUI& snake_ui) {
+    FeedForwardNeuralNetwork nn = create_from_genome(best.genome);
+    snake_engine.reset();
+    Result result = Result::Running;
+    int steps_without_food = 0;
+    int max_steps_without_food = 100;
+
+    while (result == Result::Running && snake_ui.is_open() && steps_without_food < max_steps_without_food) {
+        std::vector<double> inputs;
+        const Snake& snake = snake_engine.get_snake();
+        const Coordinates& head = snake.head();
+        const Coordinates& food = snake_engine.get_food();
+        Direction direction = snake_engine.get_direction();
+
+        // Inputs: normalized distances to walls, food, and snake body
+        auto normalize = [&](int val, int max_val) {
+            return static_cast<double>(val) / static_cast<double>(max_val);
+        };
+
+        // Add distances to walls
+        inputs.push_back(normalize(head.row, snake_engine.get_height()));
+        inputs.push_back(normalize(snake_engine.get_height() - head.row, snake_engine.get_height()));
+        inputs.push_back(normalize(head.column, snake_engine.get_width()));
+        inputs.push_back(normalize(snake_engine.get_width() - head.column, snake_engine.get_width()));
+
+        // Add distances to food
+        inputs.push_back(normalize(food.row - head.row, snake_engine.get_height()));
+        inputs.push_back(normalize(food.column - head.column, snake_engine.get_width()));
+
+        // Add current direction
+        inputs.push_back(direction == Direction::Up ? 1.0 : 0.0);
+        inputs.push_back(direction == Direction::Right ? 1.0 : 0.0);
+        inputs.push_back(direction == Direction::Down ? 1.0 : 0.0);
+        inputs.push_back(direction == Direction::Left ? 1.0 : 0.0);
+
+        // Add nearby snake body information
+        std::unordered_map<Coordinates, double, CoordinatesHash> distances;
+        for (const auto& part : snake.body) {
+            int row_diff = part.row - head.row;
+            int col_diff = part.column - head.column;
+
+            if (row_diff == 0 && col_diff == 0) continue;
+
+            if (row_diff == 0 && col_diff > 0) {
+                distances[Coordinates{0, 1}] = normalize(col_diff, snake_engine.get_width());
+            } else if (row_diff == 0 && col_diff < 0) {
+                distances[Coordinates{0, -1}] = normalize(-col_diff, snake_engine.get_width());
+            } else if (col_diff == 0 && row_diff > 0) {
+                distances[Coordinates{1, 0}] = normalize(row_diff, snake_engine.get_height());
+            } else if (col_diff == 0 && row_diff < 0) {
+                distances[Coordinates{-1, 0}] = normalize(-row_diff, snake_engine.get_height());
+            }
+        }
+
+        // Default values if no body part nearby
+        inputs.push_back(distances[Coordinates{-1, 0}]);
+        inputs.push_back(distances[Coordinates{1, 0}]);
+        inputs.push_back(distances[Coordinates{0, -1}]);
+        inputs.push_back(distances[Coordinates{0, 1}]);
+
+        // Predict the next action using the neural network
+        std::vector<double> nn_output = nn.activate(inputs);
+        Action action = map_nn_output_to_action(nn_output);
+
+        // Execute the action on the snake engine
+        result = snake_engine.process(action);
+
+        // Count steps without food
+        if (result == Result::Running) {
+            steps_without_food++;
+        } else {
+            steps_without_food = 0;
+        }
+
+        // Draw the game
+        snake_ui.process_events();
+        snake_ui.draw(snake_engine.get_snake(), snake_engine.get_food());
+    }
+}
+
+int main() {
+    DoubleConfig neat_config;
+    neat_config.population_size = 150;
+    neat_config.num_inputs = 24;
+    neat_config.num_outputs = 4;
+    neat_config.survival_threshold = 0.2;
+    neat_config.mutation_rate = 0.2;
+
+    RNG rng;
+    Population population{neat_config, rng};
+
+    SnakeEngine snake_engine(20, 20, false);
+    SnakeUI snake_ui(20, 20, 20);
+
+    auto compute_fitness_lambda = [&](auto begin, auto end) {
+        compute_fitness(begin, end, snake_engine);
+    };
+
+    int num_generations = 100;
+    Individual best = population.run(compute_fitness_lambda, num_generations);
+
+    visualize_best_individual(best, snake_engine, snake_ui);
+
+    return 0;
+}
