@@ -798,61 +798,63 @@ private:
 // Function to visualize the best individual from the population
         
 void visualize_best_individual(const Individual& best, SnakeEngine& snake_engine, SnakeUI& snake_ui) {
-FeedForwardNeuralNetwork nn = create_from_genome(best.genome);
-snake_engine.reset();
-Result result = Result::Running;
-int steps_without_food = 0;
-int max_steps_without_food = 100;
-while (result == Result::Running && snake_ui.is_open() && steps_without_food < max_steps_without_food) {
-    std::vector<double> inputs = generate_inputs(snake_engine);
+    FeedForwardNeuralNetwork nn = create_from_genome(best.genome);
+    snake_engine.reset();
+    Result result = Result::Running;
+    int steps_without_food = 0;
+    int max_steps_without_food = 100;
 
-    // Predict the next action using the neural network
-    std::vector<double> nn_output = nn.activate(inputs);
-    Action action = map_nn_output_to_action(nn_output);
+    while (result == Result::Running && snake_ui.is_open() && steps_without_food < max_steps_without_food) {
+        std::vector<double> inputs = generate_inputs(snake_engine);
 
-    // Execute the action on the snake engine
-    result = snake_engine.process(action);
+        // Predict the next action using the neural network
+        std::vector<double> nn_output = nn.activate(inputs);
+        Action action = map_nn_output_to_action(nn_output);
 
-    // Count steps without food
-    if (result == Result::Running) {
-        steps_without_food++;} else {
-steps_without_food = 0;
+        // Execute the action on the snake engine
+        result = snake_engine.process(action);
+
+        // Count steps without food
+        if (result == Result::Running) {
+            steps_without_food++;
+        } else {
+            steps_without_food = 0;
+        }
+
+        // Draw the game
+        snake_ui.process_events();
+        snake_ui.draw(snake_engine.get_snake(), snake_engine.get_food());
+
+        // Introduce a small delay to make the visualization easier to follow
+        sf::sleep(sf::milliseconds(50));
+    }
 }
 
-// Draw the game
-    snake_ui.process_events();
-    snake_ui.draw(snake_engine.get_snake(), snake_engine.get_food());
-
-    // Introduce a small delay to make the visualization easier to follow
-    sf::sleep(sf::milliseconds(50));
-}
-}
 int main() {
-DoubleConfig neat_config;
-neat_config.population_size = 150;
-neat_config.num_inputs = 24;
-neat_config.num_outputs = 4;
-neat_config.survival_threshold = 0.2;
-neat_config.mutation_rate = 0.2;
-RNG rng;
-Population population(neat_config, rng);
+    DoubleConfig neat_config;
+    neat_config.population_size = 150;
+    neat_config.num_inputs = 24;
+    neat_config.num_outputs = 4;
+    neat_config.survival_threshold = 0.2;
+    neat_config.mutation_rate = 0.2;
 
-SnakeEngine snake_engine(20, 20, false);
-SnakeUI snake_ui(20, 20, 20);
+    RNG rng;
+    Population population(neat_config, rng);
 
-auto compute_fitness_lambda = [&](auto begin, auto end) {
-    compute_fitness(begin, end, snake_engine);
-};
+    SnakeEngine snake_engine(20, 20, false);
+    SnakeUI snake_ui(20, 20, 20);
 
-int num_generations = 100;
-Individual best = population.run(compute_fitness_lambda, num_generations);
+    auto compute_fitness_lambda = [&](auto begin, auto end) {
+        compute_fitness(begin, end, snake_engine);
+    };
 
-std::cout << "Best fitness: " << best.fitness << std::endl;
+    int num_generations = 100;
+    Individual best = population.run(compute_fitness_lambda, num_generations);
 
-// Visualize the best individual
-visualize_best_individual(best, snake_engine, snake_ui);
+    std::cout << "Best fitness: " << best.fitness << std::endl;
 
-return 0;
+    // Visualize the best individual
+    visualize_best_individual(best, snake_engine, snake_ui);
+
+    return 0;
 }
-
-
