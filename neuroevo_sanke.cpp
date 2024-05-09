@@ -263,4 +263,6 @@ void mutate_remove_neuron(Genome& genome) {
         return neuron.neuron_id == choose_random_hidden(genome.neurons);
     });
 
+    if (neuron_it
+
     
