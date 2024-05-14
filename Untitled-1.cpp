@@ -20,11 +20,11 @@ struct RNG {
     std::mt19937 rng{std::random_device{}()};
     std::uniform_real_distribution<double> dist_01{0.0, 1.0};
     std::uniform_int_distribution<int> dist_int{0, 100};
-    
+
     double choose(double probability, double a, double b) {
         return dist_01(rng) < probability ? a : b;
     }
-    
+
     bool choose(double probability, bool a, bool b) {
         return dist_01(rng) < probability ? a : b;
     }
@@ -71,7 +71,7 @@ struct Activation {
 struct LinkId {
     int input_id;
     int output_id;
-    
+
     bool operator==(const LinkId& other) const {
         return input_id == other.input_id && output_id == other.output_id;
     }
@@ -495,8 +495,16 @@ FeedForwardNeuralNetwork create_from_genome(const Genome& genome) {
                 neuron_inputs.push_back(NeuronInput{link.link_id.input_id, link.weight});
             }
         }
+
+        ActivationFn activation_fn;
+        if (std::holds_alternative<ActivationFn>(neuron_gene.activation.fn)) {
+            activation_fn = std::get<ActivationFn>(neuron_gene.activation.fn);
+        } else {
+            activation_fn = [](double x) { return x; };
+        }
+
         neurons.push_back(Neuron{
-            std::get<ActivationFn>(neuron_gene.activation.fn),
+            activation_fn,
             neuron_gene.bias,
             neuron_inputs,
             neuron_gene.neuron_id
@@ -725,6 +733,9 @@ std::vector<double> generate_inputs(SnakeEngine& snake_engine) {
     inputs.push_back(distances[Coordinates{0, -1}]);
     inputs.push_back(distances[Coordinates{0, 1}]);
 
+    // Ensure we have exactly 24 inputs
+    assert(inputs.size() == 24);
+
     return inputs;
 }
 
@@ -736,7 +747,7 @@ double evaluate_fitness(const FeedForwardNeuralNetwork& nn, SnakeEngine& snake_e
 
     while (result == Result::Running && steps_without_food < max_steps_without_food) {
         std::vector<double> inputs = generate_inputs(snake_engine);
-        
+
         // Predict the next action using the neural network
         std::vector<double> nn_output = nn.activate(inputs);
         Action action = map_nn_output_to_action(nn_output);
