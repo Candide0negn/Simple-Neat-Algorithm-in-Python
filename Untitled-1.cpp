@@ -14,6 +14,8 @@
 
 // Neuroevolution Code
 
+using ActivationFn = std::function<double(double)>;
+
 struct RNG {
     std::mt19937 rng{std::random_device{}()};
     std::uniform_real_distribution<double> dist_01{0.0, 1.0};
@@ -26,7 +28,15 @@ struct RNG {
     bool choose(double probability, bool a, bool b) {
         return dist_01(rng) < probability ? a : b;
     }
-    
+
+    std::function<double(double)> choose_function(double probability, const std::function<double(double)>& a, const std::function<double(double)>& b) {
+        return dist_01(rng) < probability ? a : b;
+    }
+
+    ActivationFn choose_activation(double probability, const ActivationFn& a, const ActivationFn& b) {
+        return dist_01(rng) < probability ? a : b;
+    }
+
     template <typename T>
     T choose_random(const std::vector<T>& vec) {
         std::uniform_int_distribution<size_t> dist(0, vec.size() - 1);
@@ -49,23 +59,9 @@ struct RNG {
         std::uniform_int_distribution<int> dist(0, max);
         return dist(rng);
     }
-
-    std::function<double(double)> choose(double probability, const std::function<double(double)>& a, const std::function<double(double)>& b) {
-        return dist_01(rng) < probability ? a : b;
-    }
-
-    Activation choose(double probability, const Activation& a, const Activation& b) {
-        if (dist_01(rng) < probability) {
-            return a;
-        } else {
-            return b;
-        }
-    }
 };
 
 RNG rng;
-
-using ActivationFn = std::function<double(double)>;
 
 struct Activation {
     std::variant<std::monostate, ActivationFn> fn;
@@ -157,11 +153,12 @@ NeuronGene crossover_neuron(const NeuronGene& a, const NeuronGene& b) {
     int neuron_id = a.neuron_id;
     double bias = rng.choose(0.5, a.bias, b.bias);
     Activation activation;
+
     if (std::holds_alternative<ActivationFn>(a.activation.fn) && std::holds_alternative<ActivationFn>(b.activation.fn)) {
-        ActivationFn fn = rng.choose(0.5, std::get<ActivationFn>(a.activation.fn), std::get<ActivationFn>(b.activation.fn));
+        ActivationFn fn = rng.choose_activation(0.5, std::get<ActivationFn>(a.activation.fn), std::get<ActivationFn>(b.activation.fn));
         activation.fn = fn;
     } else {
-        activation = rng.choose(0.5, a.activation, b.activation);
+        activation.fn = std::monostate();
     }
     return {neuron_id, bias, activation};
 }
@@ -390,20 +387,19 @@ private:
     }
 
     std::vector<Individual> reproduce() {
-    auto old_members = sort_individuals_by_fitness(individuals);
-    int reproduction_cutoff = static_cast<int>(std::ceil(config.survival_threshold * old_members.size()));
-    std::vector<Individual> new_generation;
-    int spawn_size = config.population_size;
-    while (spawn_size-- > 0) {
-        const auto& p1 = *rng.choose_random(old_members.begin(), old_members.begin() + reproduction_cutoff);
-        const auto& p2 = *rng.choose_random(old_members.begin(), old_members.begin() + reproduction_cutoff);
-        Genome offspring_genome = crossover(p1, p2);
-        mutate(offspring_genome);
-        new_generation.push_back({offspring_genome, kFitnessNotComputed});
+        auto old_members = sort_individuals_by_fitness(individuals);
+        int reproduction_cutoff = static_cast<int>(std::ceil(config.survival_threshold * old_members.size()));
+        std::vector<Individual> new_generation;
+        int spawn_size = config.population_size;
+        while (spawn_size-- > 0) {
+            const auto& p1 = *rng.choose_random(old_members.begin(), old_members.begin() + reproduction_cutoff);
+            const auto& p2 = *rng.choose_random(old_members.begin(), old_members.begin() + reproduction_cutoff);
+            Genome offspring_genome = crossover(p1, p2);
+            mutate(offspring_genome);
+            new_generation.push_back({offspring_genome, kFitnessNotComputed});
+        }
+        return new_generation;
     }
-    return new_generation;
-    }
-
 
     std::vector<Individual> sort_individuals_by_fitness(std::vector<Individual>& individuals) {
         std::sort(individuals.begin(), individuals.end(), [](const Individual& a, const Individual& b) {
@@ -675,36 +671,6 @@ Action map_nn_output_to_action(const std::vector<double>& nn_output) {
     }
 }
 
-
-
-double evaluate_fitness(const FeedForwardNeuralNetwork& nn, SnakeEngine& snake_engine) {
-    snake_engine.reset();
-    Result result = Result::Running;
-    int steps_without_food = 0;
-    int max_steps_without_food = 100;
-
-    while (result == Result::Running && steps_without_food < max_steps_without_food) {
-        std::vector<double> inputs = generate_inputs(snake_engine);
-        
-        // Predict the next action using the neural network
-        std::vector<double> nn_output = nn.activate(inputs);
-        Action action = map_nn_output_to_action(nn_output);
-
-        // Execute the action on the snake engine
-        result = snake_engine.process(action);
-
-        // Count steps without food
-        if (result == Result::Running) {
-            steps_without_food++;
-        } else {
-            steps_without_food = 0;
-        }
-    }
-
-    // Fitness is the score plus a small penalty for excess steps without food
-    return static_cast<double>(snake_engine.get_score()) - 0.1 * static_cast<double>(steps_without_food);
-}
-
 std::vector<double> generate_inputs(SnakeEngine& snake_engine) {
     const Snake& snake = snake_engine.get_snake();
     const Coordinates& head = snake.head();
@@ -760,6 +726,34 @@ std::vector<double> generate_inputs(SnakeEngine& snake_engine) {
     inputs.push_back(distances[Coordinates{0, 1}]);
 
     return inputs;
+}
+
+double evaluate_fitness(const FeedForwardNeuralNetwork& nn, SnakeEngine& snake_engine) {
+    snake_engine.reset();
+    Result result = Result::Running;
+    int steps_without_food = 0;
+    int max_steps_without_food = 100;
+
+    while (result == Result::Running && steps_without_food < max_steps_without_food) {
+        std::vector<double> inputs = generate_inputs(snake_engine);
+        
+        // Predict the next action using the neural network
+        std::vector<double> nn_output = nn.activate(inputs);
+        Action action = map_nn_output_to_action(nn_output);
+
+        // Execute the action on the snake engine
+        result = snake_engine.process(action);
+
+        // Count steps without food
+        if (result == Result::Running) {
+            steps_without_food++;
+        } else {
+            steps_without_food = 0;
+        }
+    }
+
+    // Fitness is the score plus a small penalty for excess steps without food
+    return static_cast<double>(snake_engine.get_score()) - 0.1 * static_cast<double>(steps_without_food);
 }
 
 // Fitness computation function for the entire population
@@ -819,7 +813,6 @@ private:
 };
 
 // Function to visualize the best individual from the population
-        
 void visualize_best_individual(const Individual& best, SnakeEngine& snake_engine, SnakeUI& snake_ui) {
     FeedForwardNeuralNetwork nn = create_from_genome(best.genome);
     snake_engine.reset();
