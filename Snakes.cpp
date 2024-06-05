@@ -1,6 +1,10 @@
 #include <iostream>
 #include <vector>
 #include <SFML/Graphics.hpp>
+#include "Button.h"             // Include Button class declaration
+#include "EvolutionGraph.h"     // Include EvolutionGraph class declaration
+#include "Snake.h"              // Include Snake class declaration
+#include "Population.h"         // Include Population class declaration
 
 const int SIZE = 20;
 const int hidden_nodes = 16;
